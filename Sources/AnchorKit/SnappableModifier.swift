@@ -3,10 +3,12 @@ import SwiftUI
 /// View modifier that makes a view snappable within a ``SnappingContainer``.
 ///
 /// Applies a drag gesture in the global coordinate space and snaps
-/// to the nearest enabled anchor on drag end.
+/// to the nearest enabled anchor on drag end. The anchor binding is
+/// updated to reflect the resolved anchor, enabling save and restore.
 struct SnappableModifier<ID: Hashable>: ViewModifier {
 
     let id: ID
+    @Binding var anchor: SnapAnchor
     let explicitSize: CGSize?
 
     @Environment(\.snappingContainerModel) private var model
@@ -43,13 +45,17 @@ struct SnappableModifier<ID: Hashable>: ViewModifier {
             .gesture(dragGesture)
             .animation(transitionAnimation, value: transform)
             .onAppear {
-                model?.registerItem(id: key, size: effectiveSize)
+                model?.registerItem(id: key, size: effectiveSize, anchor: anchor)
             }
             .onDisappear {
                 model?.unregisterItem(id: key)
             }
             .onChange(of: effectiveSize) { _, newSize in
-                model?.registerItem(id: key, size: newSize)
+                model?.registerItem(id: key, size: newSize, anchor: anchor)
+            }
+            .onChange(of: anchor) { _, newAnchor in
+                guard !isDragging else { return }
+                model?.updateAnchor(for: key, to: newAnchor)
             }
     }
 
@@ -88,7 +94,7 @@ struct SnappableModifier<ID: Hashable>: ViewModifier {
                     x: currentPosition.x + dragOffset.width,
                     y: currentPosition.y + dragOffset.height
                 )
-                let target = model.resolveSnapTarget(
+                let (resolvedAnchor, target) = model.resolveSnapTarget(
                     for: key,
                     currentPosition: draggedPosition,
                     velocity: value.velocity
@@ -96,6 +102,7 @@ struct SnappableModifier<ID: Hashable>: ViewModifier {
                 // Two-step commit: instant position update, then animate to snap target.
                 model.setPosition(for: key, to: draggedPosition)
                 dragOffset = .zero
+                anchor = resolvedAnchor
                 withAnimation(transitionAnimation) {
                     model.setPosition(for: key, to: target)
                 }
@@ -111,10 +118,16 @@ extension View {
     ///
     /// - Parameters:
     ///   - id: Unique identifier for this snappable item.
+    ///   - anchor: Binding to the anchor this item belongs to.
+    ///     Updated when the item snaps to a new anchor after a drag.
     ///   - size: Explicit size for snap calculations. If `nil`, the view's
     ///           intrinsic size is measured automatically.
-    public func snappable<ID: Hashable>(id: ID, size: CGSize? = nil) -> some View {
-        modifier(SnappableModifier(id: id, explicitSize: size))
+    public func snappable<ID: Hashable>(
+        id: ID,
+        anchor: Binding<SnapAnchor>,
+        size: CGSize? = nil
+    ) -> some View {
+        modifier(SnappableModifier(id: id, anchor: anchor, explicitSize: size))
     }
 }
 

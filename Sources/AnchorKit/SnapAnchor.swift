@@ -13,7 +13,7 @@ import Foundation
 /// ```swift
 /// let anchors: SnapAnchor = [.corners, .center]
 /// ```
-public struct SnapAnchor: OptionSet, Sendable, Hashable {
+public struct SnapAnchor: OptionSet, Sendable, Hashable, Codable {
 
     public let rawValue: UInt16
 

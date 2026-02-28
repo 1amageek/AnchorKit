@@ -1,4 +1,5 @@
 import CoreGraphics
+import Foundation
 import Testing
 
 @testable import AnchorKit
@@ -36,6 +37,20 @@ import Testing
         #expect(combined.contains(.topLeading))
         #expect(combined.contains(.center))
         #expect(!combined.contains(.top))
+    }
+
+    @Test func codableRoundTrip() throws {
+        let original: SnapAnchor = .topTrailing
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(SnapAnchor.self, from: data)
+        #expect(decoded == original)
+    }
+
+    @Test func codableRoundTripCombined() throws {
+        let original: SnapAnchor = [.corners, .center]
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(SnapAnchor.self, from: data)
+        #expect(decoded == original)
     }
 }
 
@@ -201,43 +216,28 @@ import Testing
         let projected = SnapGeometry.project(initialVelocity: 0)
         #expect(projected == 0)
     }
-
-    // MARK: - Initial Position
-
-    @Test func initialPositionAvoidsExisting() {
-        let existing: [(position: CGPoint, size: CGSize)] = [
-            (position: CGPoint(x: 66, y: 66), size: content),
-        ]
-        let pos = SnapGeometry.initialPosition(
-            from: .corners, in: canvas, contentSize: content, insets: insets, avoiding: existing
-        )
-        let isAtTopLeading = abs(pos.x - 66) < 1 && abs(pos.y - 66) < 1
-        #expect(!isAtTopLeading)
-    }
-
-    @Test func initialPositionUsesFirstFreeAnchor() {
-        let pos = SnapGeometry.initialPosition(
-            from: .corners, in: canvas, contentSize: content, insets: insets, avoiding: []
-        )
-        // First corner (topLeading)
-        #expect(pos.x == 66)
-        #expect(pos.y == 66)
-    }
 }
 
 // MARK: - SnappingContainerModel Tests
 
 @Suite struct SnappingContainerModelTests {
 
-    @Test @MainActor func registerItem() {
+    @Test @MainActor func registerItemPositionsAtDesignatedAnchor() {
         let model = SnappingContainerModel(
             anchors: .corners, insets: SnapInsets(all: 16)
         )
         model.updateCanvasSize(CGSize(width: 800, height: 600))
-        model.registerItem(id: AnyHashable("a"), size: CGSize(width: 100, height: 100))
+        model.registerItem(
+            id: AnyHashable("a"),
+            size: CGSize(width: 100, height: 100),
+            anchor: .bottomTrailing
+        )
 
         #expect(model.items.count == 1)
         #expect(model.isPositioned(id: AnyHashable("a")))
+        let pos = model.position(for: AnyHashable("a"))
+        #expect(abs(pos.x - 734) < 1)
+        #expect(abs(pos.y - 534) < 1)
     }
 
     @Test @MainActor func unregisterItem() {
@@ -245,20 +245,24 @@ import Testing
             anchors: .corners, insets: SnapInsets(all: 16)
         )
         model.updateCanvasSize(CGSize(width: 800, height: 600))
-        model.registerItem(id: AnyHashable("a"), size: CGSize(width: 100, height: 100))
+        model.registerItem(
+            id: AnyHashable("a"),
+            size: CGSize(width: 100, height: 100),
+            anchor: .topLeading
+        )
         model.unregisterItem(id: AnyHashable("a"))
 
         #expect(model.items.isEmpty)
     }
 
-    @Test @MainActor func multipleItemsGetDifferentPositions() {
+    @Test @MainActor func itemsAtDifferentAnchorsGetDifferentPositions() {
         let model = SnappingContainerModel(
             anchors: .corners, insets: SnapInsets(all: 16)
         )
         model.updateCanvasSize(CGSize(width: 800, height: 600))
         let size = CGSize(width: 100, height: 100)
-        model.registerItem(id: AnyHashable("a"), size: size)
-        model.registerItem(id: AnyHashable("b"), size: size)
+        model.registerItem(id: AnyHashable("a"), size: size, anchor: .topLeading)
+        model.registerItem(id: AnyHashable("b"), size: size, anchor: .bottomTrailing)
 
         let posA = model.position(for: AnyHashable("a"))
         let posB = model.position(for: AnyHashable("b"))
@@ -266,13 +270,36 @@ import Testing
         #expect(!samePosition)
     }
 
+    @Test @MainActor func itemsAtSameAnchorGetSamePosition() {
+        let model = SnappingContainerModel(
+            anchors: .corners, insets: SnapInsets(all: 16)
+        )
+        model.updateCanvasSize(CGSize(width: 800, height: 600))
+        let size = CGSize(width: 100, height: 100)
+        model.registerItem(id: AnyHashable("a"), size: size, anchor: .topLeading)
+        model.registerItem(id: AnyHashable("b"), size: size, anchor: .topLeading)
+
+        let posA = model.position(for: AnyHashable("a"))
+        let posB = model.position(for: AnyHashable("b"))
+        #expect(abs(posA.x - posB.x) < 1)
+        #expect(abs(posA.y - posB.y) < 1)
+    }
+
     @Test @MainActor func bringToFrontUpdatesZIndex() {
         let model = SnappingContainerModel(
             anchors: .corners, insets: SnapInsets(all: 16)
         )
         model.updateCanvasSize(CGSize(width: 800, height: 600))
-        model.registerItem(id: AnyHashable("a"), size: CGSize(width: 100, height: 100))
-        model.registerItem(id: AnyHashable("b"), size: CGSize(width: 100, height: 100))
+        model.registerItem(
+            id: AnyHashable("a"),
+            size: CGSize(width: 100, height: 100),
+            anchor: .topLeading
+        )
+        model.registerItem(
+            id: AnyHashable("b"),
+            size: CGSize(width: 100, height: 100),
+            anchor: .topTrailing
+        )
 
         let initialZA = model.zIndex(for: AnyHashable("a"))
         model.bringToFront(id: AnyHashable("a"))
@@ -280,22 +307,38 @@ import Testing
         #expect(newZA > initialZA)
     }
 
-    @Test @MainActor func resolveSnapTargetNearest() {
+    @Test @MainActor func resolveSnapTargetReturnsAnchorAndPosition() {
         let model = SnappingContainerModel(
             anchors: .corners, insets: SnapInsets(all: 16)
         )
         model.updateCanvasSize(CGSize(width: 800, height: 600))
         let size = CGSize(width: 100, height: 100)
-        model.registerItem(id: AnyHashable("a"), size: size)
+        model.registerItem(id: AnyHashable("a"), size: size, anchor: .topLeading)
 
-        let target = model.resolveSnapTarget(
+        let (anchor, position) = model.resolveSnapTarget(
             for: AnyHashable("a"),
             currentPosition: CGPoint(x: 700, y: 500),
             velocity: .zero
         )
-        // Should snap to bottomTrailing corner: (734, 534)
-        #expect(abs(target.x - 734) < 1)
-        #expect(abs(target.y - 534) < 1)
+        #expect(anchor == .bottomTrailing)
+        #expect(abs(position.x - 734) < 1)
+        #expect(abs(position.y - 534) < 1)
+    }
+
+    @Test @MainActor func resolveSnapTargetUpdatesStoredAnchor() {
+        let model = SnappingContainerModel(
+            anchors: .corners, insets: SnapInsets(all: 16)
+        )
+        model.updateCanvasSize(CGSize(width: 800, height: 600))
+        let size = CGSize(width: 100, height: 100)
+        model.registerItem(id: AnyHashable("a"), size: size, anchor: .topLeading)
+
+        _ = model.resolveSnapTarget(
+            for: AnyHashable("a"),
+            currentPosition: CGPoint(x: 700, y: 500),
+            velocity: .zero
+        )
+        #expect(model.items.first?.anchor == .bottomTrailing)
     }
 
     @Test @MainActor func resolveSnapTargetWithVelocity() {
@@ -304,49 +347,85 @@ import Testing
         )
         model.updateCanvasSize(CGSize(width: 800, height: 600))
         let size = CGSize(width: 100, height: 100)
-        model.registerItem(id: AnyHashable("a"), size: size)
+        model.registerItem(id: AnyHashable("a"), size: size, anchor: .topLeading)
 
-        let target = model.resolveSnapTarget(
+        let (anchor, position) = model.resolveSnapTarget(
             for: AnyHashable("a"),
             currentPosition: CGPoint(x: 400, y: 300),
             velocity: CGSize(width: 2000, height: 2000)
         )
         // Velocity projects toward bottom-right
-        #expect(abs(target.x - 734) < 1)
-        #expect(abs(target.y - 534) < 1)
+        #expect(anchor == .bottomTrailing)
+        #expect(abs(position.x - 734) < 1)
+        #expect(abs(position.y - 534) < 1)
     }
 
     @Test @MainActor func itemsPositionedAfterCanvasSizeSet() {
         let model = SnappingContainerModel(
             anchors: .corners, insets: SnapInsets(all: 16)
         )
-        model.registerItem(id: AnyHashable("a"), size: CGSize(width: 100, height: 100))
+        model.registerItem(
+            id: AnyHashable("a"),
+            size: CGSize(width: 100, height: 100),
+            anchor: .topLeading
+        )
         #expect(!model.isPositioned(id: AnyHashable("a")))
 
         model.updateCanvasSize(CGSize(width: 800, height: 600))
         #expect(model.isPositioned(id: AnyHashable("a")))
     }
 
-    @Test @MainActor func canvasResizeResnapsItems() {
+    @Test @MainActor func canvasResizeKeepsAnchorAssignment() {
         let model = SnappingContainerModel(
             anchors: .corners, insets: SnapInsets(all: 16)
         )
         model.updateCanvasSize(CGSize(width: 800, height: 600))
         let size = CGSize(width: 100, height: 100)
-        model.registerItem(id: AnyHashable("a"), size: size)
-
-        // Place item at bottomTrailing of the 800x600 canvas
-        // bottomTrailing = (734, 534)
-        model.setPosition(for: AnyHashable("a"), to: CGPoint(x: 734, y: 534))
+        model.registerItem(id: AnyHashable("a"), size: size, anchor: .bottomTrailing)
 
         // Resize to smaller canvas
         model.updateCanvasSize(CGSize(width: 400, height: 300))
         let posAfter = model.position(for: AnyHashable("a"))
 
-        // Position must have changed since (734, 534) is outside the 400x300 canvas
+        // Anchor stays bottomTrailing, position recomputed for new canvas
+        #expect(model.items.first?.anchor == .bottomTrailing)
         // New bottomTrailing = (400-50-16, 300-50-16) = (334, 234)
         #expect(abs(posAfter.x - 334) < 1)
         #expect(abs(posAfter.y - 234) < 1)
+    }
+
+    @Test @MainActor func updateAnchorRepositionsItem() {
+        let model = SnappingContainerModel(
+            anchors: .corners, insets: SnapInsets(all: 16)
+        )
+        model.updateCanvasSize(CGSize(width: 800, height: 600))
+        let size = CGSize(width: 100, height: 100)
+        model.registerItem(id: AnyHashable("a"), size: size, anchor: .topLeading)
+
+        let posBefore = model.position(for: AnyHashable("a"))
+        #expect(abs(posBefore.x - 66) < 1)
+        #expect(abs(posBefore.y - 66) < 1)
+
+        model.updateAnchor(for: AnyHashable("a"), to: .bottomTrailing)
+        let posAfter = model.position(for: AnyHashable("a"))
+        #expect(abs(posAfter.x - 734) < 1)
+        #expect(abs(posAfter.y - 534) < 1)
+        #expect(model.items.first?.anchor == .bottomTrailing)
+    }
+
+    @Test @MainActor func updateAnchorNoOpWhenSame() {
+        let model = SnappingContainerModel(
+            anchors: .corners, insets: SnapInsets(all: 16)
+        )
+        model.updateCanvasSize(CGSize(width: 800, height: 600))
+        let size = CGSize(width: 100, height: 100)
+        model.registerItem(id: AnyHashable("a"), size: size, anchor: .topLeading)
+
+        let posBefore = model.position(for: AnyHashable("a"))
+        model.updateAnchor(for: AnyHashable("a"), to: .topLeading)
+        let posAfter = model.position(for: AnyHashable("a"))
+        #expect(posBefore.x == posAfter.x)
+        #expect(posBefore.y == posAfter.y)
     }
 
     @Test @MainActor func stackTransformUsesLayout() {
@@ -356,13 +435,8 @@ import Testing
         )
         model.updateCanvasSize(CGSize(width: 800, height: 600))
         let size = CGSize(width: 100, height: 100)
-        model.registerItem(id: AnyHashable("a"), size: size)
-        model.registerItem(id: AnyHashable("b"), size: size)
-
-        // Place both at the same anchor
-        let anchor = CGPoint(x: 66, y: 66)
-        model.setPosition(for: AnyHashable("a"), to: anchor)
-        model.setPosition(for: AnyHashable("b"), to: anchor)
+        model.registerItem(id: AnyHashable("a"), size: size, anchor: .topLeading)
+        model.registerItem(id: AnyHashable("b"), size: size, anchor: .topLeading)
 
         // a has lower z-index (registered first), so a is depth 0 (identity)
         let transformA = model.stackTransform(for: AnyHashable("a"), layout: layout)

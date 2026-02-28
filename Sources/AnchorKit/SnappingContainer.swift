@@ -2,20 +2,20 @@ import SwiftUI
 
 /// A container that enables its children to snap to anchor positions.
 ///
-/// Wrap your content in a `SnappingContainer` and apply `.snappable(id:)`
+/// Wrap your content in a `SnappingContainer` and apply `.snappable(id:anchor:)`
 /// to each child that should participate in snap-to-anchor behavior.
 ///
 /// ```swift
 /// SnappingContainer(anchors: [.corners, .center]) {
-///     ForEach(items) { item in
+///     ForEach($items) { $item in
 ///         FloatingCard(item: item)
-///             .snappable(id: item.id)
+///             .snappable(id: item.id, anchor: $item.anchor)
 ///     }
 /// }
 /// ```
 ///
-/// The container manages canvas geometry, initial positioning, drag
-/// gestures, and collision avoidance for all snappable children.
+/// The container manages canvas geometry, anchor-based positioning, drag
+/// gestures, and stack layout for all snappable children.
 public struct SnappingContainer<Content: View>: View {
 
     private let content: Content
@@ -32,7 +32,7 @@ public struct SnappingContainer<Content: View>: View {
     ///     Defaults to 16pt on all edges.
     ///   - stackLayout: Defines how items visually spread when sharing
     ///     the same anchor. Defaults to ``CascadeStackLayout``.
-    ///   - content: The views to display. Apply `.snappable(id:)` to
+    ///   - content: The views to display. Apply `.snappable(id:anchor:)` to
     ///     each view that should snap.
     public init(
         anchors: SnapAnchor = .corners,
@@ -81,26 +81,42 @@ private enum PreviewLayoutOption: String, CaseIterable {
     }
 }
 
+private struct PreviewCard: Identifiable {
+    let id: Int
+    let color: Color
+    var anchor: SnapAnchor
+}
+
 private struct LayoutSwitcherPreview: View {
 
     @State private var selectedLayout: PreviewLayoutOption = .cascade
+    @State private var cards: [PreviewCard] = [
+        PreviewCard(id: 0, color: .red, anchor: .topLeading),
+        PreviewCard(id: 1, color: .blue, anchor: .topLeading),
+        PreviewCard(id: 2, color: .orange, anchor: .topTrailing),
+        PreviewCard(id: 3, color: .green, anchor: .topTrailing),
+        PreviewCard(id: 4, color: .purple, anchor: .center),
+        PreviewCard(id: 5, color: .yellow, anchor: .center),
+        PreviewCard(id: 6, color: .mint, anchor: .bottomLeading),
+        PreviewCard(id: 7, color: .cyan, anchor: .bottomTrailing),
+        PreviewCard(id: 8, color: .pink, anchor: .center),
+    ]
 
-    private let colors: [Color] = [.red, .blue, .orange, .green, .purple, .yellow, .mint, .cyan]
     private let size = CGSize(width: 80, height: 80)
 
     var body: some View {
         VStack(spacing: 0) {
             SnappingContainer(anchors: [.corners, .center], stackLayout: selectedLayout.layout) {
-                ForEach(colors.indices, id: \.self) { index in
+                ForEach($cards) { $card in
                     RoundedRectangle(cornerRadius: 12)
-                        .fill(colors[index].gradient)
+                        .fill(card.color.gradient)
                         .frame(width: size.width, height: size.height)
                         .overlay {
-                            Text("\(index)")
+                            Text("\(card.id)")
                                 .font(.title2.bold())
                                 .foregroundStyle(.white)
                         }
-                        .snappable(id: index, size: size)
+                        .snappable(id: card.id, anchor: $card.anchor, size: size)
                 }
             }
 
